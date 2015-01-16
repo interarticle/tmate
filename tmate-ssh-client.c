@@ -199,7 +199,9 @@ static void on_session_event(struct tmate_ssh_client *client)
 			 * keys if the identity has a passphrase and the
 			 * regular one doesn't.
 			 */
-			ssh_options_set(session, SSH_OPTIONS_IDENTITY, identity);
+			if (ssh_options_set(session, SSH_OPTIONS_IDENTITY, identity) < 0) {
+				tmate_warn("cannot set ssh identity: %s", ssh_get_error(session));
+			}
 			free(identity);
 		}
 
@@ -456,6 +458,9 @@ static void printflike2 reconnect_session(struct tmate_ssh_client *client,
 	__kill_session(client, fmt, ap);
 	va_end(ap);
 
+	// Indicate connection failure
+	event_active(&client->tmate_session->ev_client_shutdown, EV_READ, 0);
+
 	/* Not yet implemented... */
 #if 0
 	tv.tv_sec = 1;
@@ -469,6 +474,8 @@ struct tmate_ssh_client *tmate_ssh_client_alloc(struct tmate_session *session,
 {
 	struct tmate_ssh_client *client;
 	client = xmalloc(sizeof(*client));
+
+	memset(client, 0, sizeof(*client));
 
 	memset(&client->ssh_callbacks, 0, sizeof(client->ssh_callbacks));
 	ssh_callbacks_init(&client->ssh_callbacks);

@@ -490,6 +490,13 @@ const struct options_table_entry session_options_table[] = {
 	  .default_str = "c7:a1:51:36:d2:bb:35:4b:0a:1a:c0:43:97:74:ea:42"
 	},
 
+	{ .name = "tmate-client-retry-delay",
+	  .type = OPTIONS_TABLE_NUMBER,
+	  .default_num = 1,
+	  .minimum = 1,
+	  .maximum = USHRT_MAX,
+	},
+
 
 	{ .name = NULL }
 };

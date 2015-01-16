@@ -68,6 +68,9 @@ static void dns_cb(int errcode, struct evutil_addrinfo *addr, void *ptr)
 	}
 
 	evutil_freeaddrinfo(addr);
+	tmate_session.clients_initiated = true;
+	/* immediately check if all clients failed to connect: not needed? */
+	event_active(&tmate_session.ev_client_shutdown, EV_READ, 0);
 
 	/*
 	 * XXX For some reason, freeing the DNS resolver makes MacOSX flip out...
@@ -75,6 +78,28 @@ static void dns_cb(int errcode, struct evutil_addrinfo *addr, void *ptr)
 	 * evdns_base_free(ev_dnsbase, 0);
 	 * ev_dnsbase = NULL;
 	 */
+}
+
+static void client_shutdown_cb(evutil_socket_t fd, short what, void *arg) {
+	struct tmate_session* session = (struct tmate_session*) arg;
+	tmate_debug("client_shutdown_cb: EMPTY: %d", TAILQ_EMPTY(&session->clients));
+	if (session->clients_initiated && TAILQ_EMPTY(&session->clients)) {
+		session->clients_initiated = false;
+
+		short reconnect_time = options_get_number(
+			&global_s_options, "tmate-client-retry-delay");
+		tmate_status_message("Waiting %d seconds to reconnect", reconnect_time);
+		struct timeval tv;
+		tv.tv_sec = reconnect_time;
+		tv.tv_usec = 0;
+		evtimer_add(&session->ev_client_reconnect, &tv);
+	}
+}
+
+static void on_reconnect_timer(evutil_socket_t fd, short what, void *arg) {
+	struct tmate_session* session = (struct tmate_session*) arg;
+	tmate_status_message("Reconnecting");
+	tmate_session_start();
 }
 
 static void lookup_and_connect(void)
@@ -97,7 +122,7 @@ static void lookup_and_connect(void)
 					       "tmate-server-host");
 	tmate_info("Looking up %s...", tmate_server_host);
 	(void)evdns_getaddrinfo(ev_dnsbase, tmate_server_host, NULL,
-				&hints, dns_cb, tmate_server_host);
+				&hints, dns_cb, (void*) tmate_server_host);
 }
 
 static void ssh_log_function(int priority, const char *function,
@@ -113,18 +138,34 @@ void tmate_session_init(void)
 
 	tmate_encoder_init(&tmate_session.encoder);
 	tmate_decoder_init(&tmate_session.decoder);
+	tmate_session.ev_client_shutdown.ev_flags = 0;
+	event_assign(&tmate_session.ev_client_shutdown,
+		ev_base, -1, 0, client_shutdown_cb, &tmate_session);
+	evtimer_assign(&tmate_session.ev_client_reconnect, ev_base,
+		on_reconnect_timer, &tmate_session);
+
+	tmate_session.clients_initiated = false;
 
 	TAILQ_INIT(&tmate_session.clients);
 
 	tmate_session.need_passphrase = 0;
 	tmate_session.passphrase = NULL;
-
-	/* The header will be written as soon as the first client connects */
-	tmate_write_header();
 }
 
 void tmate_session_start(void)
 {
+	// Clean out buffer
+	evbuffer_free(tmate_session.encoder.buffer);
+	tmate_session.encoder.buffer = evbuffer_new();
+	assert(evbuffer_get_length(tmate_session.encoder.buffer) == 0);
+	/* The header will be written as soon as the first client connects */
+	/* Migrated here on the basis that a session restart should require 
+	 * reconnection.  The output buffer will be cleaned before restart for
+	 * safety.
+	 * */
+	tmate_write_header();
+	tmate_sync_layout();
+
 	/* We split init and start because:
 	 * - We need to process the tmux config file during the connection as
 	 *   we are setting up the tmate identity.

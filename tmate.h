@@ -135,6 +135,11 @@ struct tmate_session {
 	struct tmate_ssh_clients clients;
 	int need_passphrase;
 	char *passphrase;
+
+	// Auto reconnect
+	struct event ev_client_shutdown;
+	struct event ev_client_reconnect;
+	bool clients_initiated;
 };
 
 extern struct tmate_session tmate_session;
